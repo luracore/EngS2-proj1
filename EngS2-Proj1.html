@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGIS</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+    <style>
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      height: 10%;
+      width: 100%;
+      text-align: center;
+      border-bottom: solid 2px black;
+    }
+
+    #mapDiv {
+      height: 60%;
+      width: 80%;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #map {
+      width: 100%;
+      height: 80%;
+      position: relative;
+      flex: 1;
+    }
+
+    #message {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: white;
+      padding: 6px 12px;
+      border: 1px solid #ccc;
+      display: none;
+      z-index: 1000;
+    }
+
+    #controls {
+      display: flex;
+      flex-direction: row;
+      padding: 15px;
+    }
+
+    .leaflet-bar a {
+      display: flex !important;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #resultsDiv {
+      height: 30%;
+      width: 80%;
+      margin: 0 auto;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #results {
+      width: 100%;
+      height: 70%;
+      overflow-y: auto;
+      margin-top: 10px;
+      border: 1px solid #ccc;
+      padding: 10px;
+      font-size: 14px;
+      background: white;
+    }
+
+    .result-item {
+      padding: 6px;
+      border-bottom: 1px solid #eee;
+      cursor: pointer;
+    }
+
+    .result-item:hover {
+      background: #f0f0f0;
+    }
+
+    .result-item.active {
+      background: #fff3e6;
+      border-left: 4px solid #ff7f00;
+    }
+    </style>
+  </head>
+
+  <body>
+    <header>
+      <h1>Comida perto</h1>
+    </header>
+
+    <div id="mapDiv">
+      <div id="controls">
+        <div>
+          <label>Distância: <span id="distanceValue">1 km</span></label><br>
+          <input type="range" id="distanceInput" min="0.5" max="5" step="0.5" value="1">
+        </div>
+        <div>
+          <label>
+            Tipo:
+            <select id="typeInput">
+              <option value="restaurant" selected>Restaurante</option>
+              <option value="cafe">Café</option>
+              <option value="bar">Bar</option>
+              <option value="fast_food">Fast Food</option>
+              <option value="pub">Pub</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div id="map">
+        <div id="message"></div>
+      </div>
+    </div>
+
+    <div id="resultsDiv">
+      <div id="results"></div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+    <script>
+
+      /* ================= MAPA ================= */
+
+      const map = L.map('map').setView([-19.9245, -43.9352], 15);
+
+      // Camada Ruas (OpenStreetMap)
+      const streets = L.tileLayer(
+        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {}
+      );
+
+      // Camada Satélite (Esri)
+      const satellite = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/' +
+        'World_Imagery/MapServer/tile/{z}/{y}/{x}', {}
+      );
+
+      // Adiciona ruas como padrão
+      streets.addTo(map);
+
+      const baseMaps = {
+        "Ruas": streets,
+        "Satélite": satellite
+      };
+
+      L.control.layers(baseMaps).addTo(map);
+
+      const LocationControl = L.Control.extend({
+        options: {position: 'bottomright'},
+
+        onAdd: function () {
+          const div = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-location');
+          const link = L.DomUtil.create('a', '', div);
+
+          link.href = '#';
+          link.title = 'Minha localização';
+          link.innerHTML = `
+<svg width="30" height="30" viewBox="0 0 24 24">
+  <circle cx="12" cy="12" r="9" stroke="#4285F4" stroke-width="2" fill="none"/>
+  <circle cx="12" cy="12" r="3" fill="#4285F4"/>
+</svg>
+`;
+
+          L.DomEvent.on(link, 'click', function (e) {
+            L.DomEvent.stop(e);
+            map.locate({
+              setView: true,
+              maxZoom: 16,
+              enableHighAccuracy: true
+            });
+          });
+
+          return div;
+        }
+      });
+
+      map.addControl(new LocationControl());
+
+      // 4️⃣ Eventos de localização
+      let userMarker;
+
+      map.on('locationfound', function (e) {
+
+        const {lat, lng} = e.latlng;
+
+        lastClickedLatLng = {lat, lng};
+
+        if (clickMarker) {
+          map.removeLayer(clickMarker);
+        }
+
+        clickMarker = L.marker([lat, lng], {icon: userIcon})
+          .addTo(map)
+          .bindPopup("Você está aqui")
+          .openPopup();
+
+        agendarBusca(lat, lng);
+      });
+
+      map.on('locationerror', function () {
+        alert("Não foi possível obter sua localização.");
+      });
+
+      const markerCluster = L.markerClusterGroup({
+        disableClusteringAtZoom: 17,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false
+      });
+      map.addLayer(markerCluster);
+
+      /* ================= ICONS ================= */
+
+      const userIcon = new L.Icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png',
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+      });
+
+      const localIcon = new L.Icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+      });
+
+      const activeIcon = new L.Icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-orange.png',
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+      });
+
+      /* ================= ELEMENTOS ================= */
+
+      const message = document.getElementById('message');
+      const range = document.getElementById('distanceInput');
+      const distanceLabel = document.getElementById('distanceValue');
+      const typeSelect = document.getElementById('typeInput');
+
+      const resultsDiv = document.getElementById('results');
+
+      /* ================= ESTADO ================= */
+
+      let lastClickedLatLng = null;
+      let clickMarker = null;
+      let searchCircle = null;
+      let currentController = null;
+
+      const COOLDOWN_TIME = 5000;
+
+      let cooldownUntil = 0;
+      let cooldownTimer = null;
+      let pendingRequest = null;
+      let countdownInterval = null;
+
+      let activeItem = null;
+      let activeMarker = null;
+
+      /* ================= UTIL ================= */
+
+      function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+      }
+
+      function montarQuery(lat, lon, radius, type) {
+        return `
+    [out:json][timeout:15];
+    (
+      node["amenity"="${type}"](around:${radius},${lat},${lon});
+      way["amenity"="${type}"](around:${radius},${lat},${lon});
+      relation["amenity"="${type}"](around:${radius},${lat},${lon});
+    );
+    out center qt;
+  `;
+      }
+
+      /* ================= BUSCA ================= */
+
+      async function buscarLocais(lat, lon, radius, type, attempt = 0) {
+
+        if (currentController) {
+          currentController.abort();
+        }
+
+        currentController = new AbortController();
+
+        const query = montarQuery(lat, lon, radius, type);
+        const url =
+          'https://overpass-api.de/api/interpreter?data=' +
+          encodeURIComponent(query);
+
+        const res = await fetch(url, {
+          signal: currentController.signal
+        });
+
+        if (res.status === 504) {
+          if (attempt < 3) {
+            console.log('Tentando de novo em: ' + (2 + attempt + 1) + 's')
+            await sleep(3000);
+            return buscarLocais(lat, lon, radius, type, attempt + 1);
+          }
+          throw new Error("Servidor demorou demais (504).");
+        }
+
+        if (res.status === 429) {
+          if (attempt < 3) {
+            const retryAfter = res.headers.get("Retry-After");
+            const delay = retryAfter
+              ? parseInt(retryAfter, 10) * 1000
+              : 2000 * (attempt + 1);
+
+            console.log('Tentando de novo em: ' + (2 + attempt + 1) + 's')
+
+            await sleep(delay);
+            return buscarLocais(lat, lon, radius, type, attempt + 1);
+          }
+          throw new Error("Muitas requisições (429). Aguarde alguns segundos.");
+        }
+
+        if (!res.ok) {
+          throw new Error(`Erro HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        return data.elements || [];
+      }
+
+      /* ================= EXECUÇÃO ================= */
+
+      async function executarBusca(lat, lng) {
+
+        message.textContent = "Carregando locais...";
+        message.style.display = 'block';
+
+        const distanceKm = range.valueAsNumber || 1;
+        const distance = distanceKm * 1000;
+        const type = typeSelect.value;
+
+        if (searchCircle) map.removeLayer(searchCircle);
+
+        searchCircle = L.circle([lat, lng], {
+          radius: distance,
+          color: 'blue',
+          fillOpacity: 0.1
+        }).addTo(map);
+
+        try {
+
+          const locais = await buscarLocais(lat, lng, distance, type);
+
+          markerCluster.clearLayers();
+          resultsDiv.innerHTML = "";
+
+          const markers = [];
+
+          locais.forEach(r => {
+
+            let pos = null;
+
+            if (r.type === "node") {
+              pos = [r.lat, r.lon];
+            } else if (r.center) {
+              pos = [r.center.lat, r.center.lon];
+            }
+
+            if (!pos) return;
+
+            const tags = r.tags || {};
+            if (!tags.name) return;
+
+            const name = tags.name;
+
+            // ===== ENDEREÇO =====
+            const street = tags["addr:street"] || "";
+            const number = tags["addr:housenumber"] || "";
+            const suburb = tags["addr:suburb"] || "";
+            const city = tags["addr:city"] || "";
+
+            let addressParts = [];
+            if (street) addressParts.push(street);
+            if (number) addressParts.push(number);
+            if (suburb) addressParts.push(suburb);
+            if (city) addressParts.push(city);
+
+            const address = addressParts.join(", ");
+
+            // ===== OUTRAS INFOS =====
+            const cuisine = tags.cuisine || "";
+            const opening = tags.opening_hours || "";
+            const phone = tags.phone || tags["contact:phone"] || "";
+            const website = tags.website || tags["contact:website"] || "";
+
+            // ================= POPUP =================
+            const marker = L.marker(pos, { icon: localIcon })
+              .bindPopup(`
+    <b>${name}</b>
+  `);
+
+            // ================= ITEM DA LISTA =================
+            const item = document.createElement('div');
+            item.className = "result-item";
+
+            item.innerHTML = `
+  <div class="result-title">${name}</div>
+
+  ${cuisine ? `<div class="result-cuisine">🍽️ ${cuisine}</div>` : ""}
+
+  ${address ? `<div class="result-address">📍 ${address}</div>` : ""}
+
+  ${opening ? `
+    <div class="result-row">
+      <span>🕒 Horário</span>
+      <span>${opening}</span>
+    </div>
+  ` : ""}
+
+  ${phone ? `
+    <div class="result-row">
+      <span>📞 Telefone</span>
+      <span>${phone}</span>
+    </div>
+  ` : ""}
+
+  ${website ? `
+    <div class="result-row">
+      <span>🌐 Site</span>
+      <span><a href="${website}" target="_blank">Abrir</a></span>
+    </div>
+  ` : ""}
+`;
+
+            // Clique na lista → centraliza + popup
+            item.addEventListener('click', () => {
+
+              if (activeItem) activeItem.classList.remove('active');
+              if (activeMarker) activeMarker.setIcon(localIcon);
+
+              item.classList.add('active');
+              activeItem = item;
+
+              marker.setIcon(activeIcon);
+              activeMarker = marker;
+
+              markerCluster.zoomToShowLayer(marker, () => {
+                marker.openPopup();
+              });
+
+              item.scrollIntoView({
+                behavior: "smooth",
+                block: "start"
+              });
+            });
+
+            // Clique no marcador → mover item para o topo
+            marker.on('click', () => {
+
+              if (activeItem) activeItem.classList.remove('active');
+              if (activeMarker) activeMarker.setIcon(localIcon);
+
+              item.classList.add('active');
+              activeItem = item;
+
+              marker.setIcon(activeIcon);
+              activeMarker = marker;
+
+              item.scrollIntoView({
+                behavior: "smooth",
+                block: "start"
+              });
+            });
+
+            resultsDiv.appendChild(item);
+
+            // Só depois adiciona no array
+            markers.push(marker);
+          });
+
+          markerCluster.addLayers(markers);
+
+          if (!markers.length) {
+            resultsDiv.innerHTML = "<i>Nenhum local encontrado.</i>";
+          }
+
+        } catch (err) {
+          if (err.name !== "AbortError") {
+            console.error(err);
+            alert(err.message);
+          }
+        } finally {
+          message.style.display = 'none';
+          cooldownUntil = Date.now() + COOLDOWN_TIME;
+        }
+      }
+
+      /* ================= AGENDAMENTO COM FILA ================= */
+
+      function agendarBusca(lat, lng) {
+
+        const now = Date.now();
+
+        if (now >= cooldownUntil) {
+          executarBusca(lat, lng);
+          return;
+        }
+
+        pendingRequest = {lat, lng};
+
+        const delay = cooldownUntil - now;
+
+        // Mostrar contador visual
+        message.style.display = 'block';
+
+        if (!countdownInterval) {
+
+          function atualizarContador() {
+            const restante = Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000));
+            message.textContent = `Espere: ${restante}s`;
+
+            if (restante <= 0) {
+              clearInterval(countdownInterval);
+              countdownInterval = null;
+            }
+          }
+
+          atualizarContador();
+          countdownInterval = setInterval(atualizarContador, 1000);
+        }
+
+        if (!cooldownTimer) {
+
+          cooldownTimer = setTimeout(() => {
+
+            cooldownTimer = null;
+
+            if (countdownInterval) {
+              clearInterval(countdownInterval);
+              countdownInterval = null;
+            }
+
+            message.textContent = "Carregando locais...";
+
+            if (pendingRequest) {
+              const {lat, lng} = pendingRequest;
+              pendingRequest = null;
+              executarBusca(lat, lng);
+            }
+
+          }, delay);
+        }
+      }
+
+      /* ================= EVENTOS ================= */
+
+      map.on('click', function (e) {
+
+        const {lat, lng} = e.latlng;
+        lastClickedLatLng = {lat, lng};
+
+        if (clickMarker) map.removeLayer(clickMarker);
+
+        clickMarker = L.marker([lat, lng], {icon: userIcon})
+          .addTo(map)
+          .bindPopup("Você clicou aqui")
+          .openPopup();
+
+        agendarBusca(lat, lng);
+      });
+
+      range.addEventListener('input', () => {
+        distanceLabel.textContent = range.value + " km";
+      });
+
+      range.addEventListener('change', () => {
+        if (lastClickedLatLng) {
+          agendarBusca(lastClickedLatLng.lat, lastClickedLatLng.lng);
+        }
+      });
+
+      typeSelect.addEventListener('change', () => {
+        if (lastClickedLatLng) {
+          agendarBusca(lastClickedLatLng.lat, lastClickedLatLng.lng);
+        }
+      });
+
+    </script>
+  </body>
+
+</html>
