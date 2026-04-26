@@ -319,7 +319,7 @@ body {
 
         const query = montarQuery(lat, lon, radius, type);
         const url =
-          'https://overpass-api.de/api/interpreter?data=' +
+          'https://overpass.kumi.systems/api/interpreter?data=' +
           encodeURIComponent(query);
 
         const res = await fetch(url, {
